@@ -1,3 +1,10 @@
+-- Put this script in a "Mission Start" trigger
+-- Create a trigger zone to barrage with flak, named eg. "FlakZone1"
+-- Start the barrage with conditions of your choice by calling:
+--   startBarrage("FlakZone1", minAlt, maxAlt, roundsPerMinute)
+-- End the barrage by calling:
+--   endBarrage("FlakZone1")
+
 local PI = math.pi
 local random = math.random
 local cos = math.cos
