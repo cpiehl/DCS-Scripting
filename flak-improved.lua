@@ -2,6 +2,9 @@
 --
 -- Put this script in a "Mission Start" trigger
 -- Create a trigger zone to barrage with flak, named eg. "FlakZone1"
+-- Rounds per minute is the combined fire rate of all simulated "guns"
+--   A single 8.8cm Flak 36 had a fire rate of 15-20 rounds per minute,
+--   so multiply accordingly, eg. 180 RPM is roughly equivalent to 12 Flak 36s
 --
 -- Start a barrage with conditions of your choice by calling:
 --   startBarrage("FlakZone1", minAlt, maxAlt, roundsPerMinute)
