@@ -2,11 +2,16 @@
 --
 -- Put this script in a "Mission Start" trigger
 -- Create a trigger zone to barrage with flak, named eg. "FlakZone1"
+-- This is intended to be used with the "Switched Condition" trigger,
+--   with "Part of Coalition in Zone" to start and "All of Coalition Out of Zone"
+--   to end, though any discrete start and end events will work.
+-- Do not use with "Continuous Action" triggers; they will start more barrages
+--   than you intend.
 -- Rounds per minute is the combined fire rate of all simulated "guns"
 --   A single 8.8cm Flak 36 had a fire rate of 15-20 rounds per minute,
 --   so multiply accordingly, eg. 180 RPM is roughly equivalent to 12 Flak 36s
 --
--- Start a barrage with conditions of your choice by calling:
+-- Start a barrage by calling:
 --   startBarrage("FlakZone1", minAlt, maxAlt, roundsPerMinute)
 --   minAlt and maxAlt are limits in meters
 -- End the barrage by calling:
