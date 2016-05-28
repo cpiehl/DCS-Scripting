@@ -46,6 +46,7 @@ lowDev = 30
 medDev = 20
 highDev = 10
 
+local G = 9.81
 local PI = math.pi
 local random = math.random
 local cos = math.cos
@@ -156,7 +157,10 @@ function concentrated_prediction(params, time)
     local targetPos = target:getPoint()
     if targetDist > minRange and targetDist < maxRange then
       local targetVel = target:getVelocity()
-      local travelTime = targetDist / muzzleVelocity
+			local targetHeight = targetPos.y - zone.point.y
+			-- Losses due to gravity, ignoring air resistance for now
+			local averageShellVel = (muzzleVelocity - sqrt(2 * G * targetHeight))
+      local travelTime = targetDist / averageShellVel
       local firePos = leadPrediction(targetPos, targetVel, travelTime)
       for i = 1, roundsPerBurst do
         firePos = skillDeviation(firePos, targetDist, skill)
@@ -249,7 +253,10 @@ function continuously_pointed(params, time)
     end
     if targetDist > minRange and targetDist < maxRange then
       local targetVel = Unit.getVelocity(target)
-      local travelTime = targetDist / muzzleVelocity
+			local targetHeight = targetPos.y - zone.point.y
+			-- Losses due to gravity, ignoring air resistance for now
+			local averageShellVel = (muzzleVelocity - sqrt(2 * G * targetHeight))
+      local travelTime = targetDist / averageShellVel
       local firePos = leadPrediction(targetPos, targetVel, travelTime)
       firePos = skillDeviation(firePos, targetDist, skill)
       timer.scheduleFunction(
