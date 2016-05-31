@@ -12,13 +12,15 @@
 --   so multiply accordingly, eg. 180 RPM is roughly equivalent to 12 Flak 36s
 --
 -- Start a barrage by calling:
---   startBarrage("FlakZone1", minAlt, maxAlt, roundsPerMinute)
+--   startBarrage("FlakZone1", gunType, numOfGuns, minAlt, maxAlt)
+--   gunType is the type of gun, eg. "flak88", "oerlikon35", "bofors40", etc
 --   minAlt and maxAlt are limits in meters
 -- End the barrage by calling:
 --   endBarrage("FlakZone1")
 --
 -- Start continuously pointed fire by calling:
---   startContinuous("FlakZone1", targetCoalition, skill, roundsPerMinute, [closestOnly])
+--   startContinuous("FlakZone1", gunType, numOfGuns, targetCoalition, skill, [closestOnly])
+--   gunType is the type of gun, eg. "flak88", "oerlikon35", "bofors40", etc
 --   targetCoalition is the team color to shoot at, eg. "red" or "blue"
 --   skill determines accuracy, "low", "med", or "high"
 --   closestOnly optional, set to true to fire continuously only at the closest target
@@ -27,16 +29,16 @@
 --   endContinuous("FlakZone1")
 --
 -- Start concentrated prediction fire by calling:
---   startConcentrated("FlakZone1", targetCoalition, skill, roundsPerBurst, delay)
+--   startConcentrated("FlakZone1", gunType, numOfGuns, targetCoalition, skill, delay)
+--   gunType is the type of gun, eg. "flak88", "oerlikon35", "bofors40", etc
+--   numOfGuns determines how many guns will fire in a single concentrated burst
 --   targetCoalition is the team color to shoot at, eg. "red" or "blue"
 --   skill determines accuracy, "low", "med", or "high"
---   roundsPerBurst is how many guns will shoot at the single target in one
---     concentrated burst
 --   delay is seconds between bursts
 -- End it manually by calling:
 --   endConcentrated("FlakZone1")
 
-local _debug = false
+local _debug = true
 local debugText = nil
 if _debug then
   debugText = trigger.action.outText
@@ -44,10 +46,36 @@ else
   debugText = function() end
 end
 
-muzzleVelocity = 820 -- m/s
-minRange = 1000 -- minimum fusing distance
-maxRange = 8000
-shellStrength = 9 -- explosive power of flak shells
+gunData = {
+  ["flak88"] = {
+    ["muzzleVel"] = 840,  -- m/s
+    ["minRange"] = 1000,  -- minimum fusing distance in meters
+    ["maxRange"] = 8000,
+    ["roundsPerMin"] = 20,
+    ["shellStrength"] = 9 -- explosive power of shells
+  },
+  ["flak105"] = {
+    ["muzzleVel"] = 880,
+    ["minRange"] = 1000,
+    ["maxRange"] = 9500,
+    ["roundsPerMin"] = 15,
+    ["shellStrength"] = 10
+  },
+  ["oerlikon35"] = {
+    ["muzzleVel"] = 1175,
+    ["minRange"] = 1000,
+    ["maxRange"] = 4000,
+    ["roundsPerMin"] = 550,
+    ["shellStrength"] = 3
+  },
+  ["bofors40"] = {
+    ["muzzleVel"] = 880,
+    ["minRange"] = 1000,
+    ["maxRange"] = 7200,
+    ["roundsPerMin"] = 120,
+    ["shellStrength"] = 5
+  }
+}
 
 -- random deviation by skill in meters
 lowDev = 40
@@ -62,7 +90,7 @@ local sin = math.sin
 local sqrt = math.sqrt
 
 function explode(params, time)
-  trigger.action.explosion(params["position"], shellStrength)
+  trigger.action.explosion(params["position"], params["shellStrength"])
   return nil
 end
 
@@ -104,16 +132,16 @@ function leadPrediction(targetPos, targetVel, targetAcc, travelTime)
   }
 end
 
-function skillDeviation(firePos, targetDist, skill)
+function skillDeviation(firePos, targetDist, gunType, skill)
   if skill == "low" then
-    dev = lowDev
+    dev = lowDev  -- replace these with per-gun deviations if wanted
   elseif skill == "med" then
-    dev = medDev
+    dev = medDev  -- gunData[gunType].medDev
   elseif skill == "high" then
-    dev = highDev
+    dev = highDev  -- gunData[gunType].highDev
   end
 
-  dev = dev * (targetDist / maxRange)
+  dev = dev * (targetDist / gunData[gunType].maxRange)
 
   return {
     ["x"] = firePos.x + (dev * random(-dev, dev)),
@@ -125,7 +153,7 @@ end
 -- Probably want to start this on a Switched Condition,
 --   Part of Coalition in Zone
 local concentratedIDs = {}
-function startConcentrated(zoneName, targetCoalition, skill, roundsPerBurst, delay)
+function startConcentrated(zoneName, gunType, numOfGuns, targetCoalition, skill, delay)
   if targetCoalition == "blue" then
     targetCoalition = 2
   elseif targetCoalition == "red" then
@@ -139,9 +167,10 @@ function startConcentrated(zoneName, targetCoalition, skill, roundsPerBurst, del
     concentrated_prediction,
     {
       ["zoneName"] = zoneName,
+      ["gunType"] = gunType,
+      ["numOfGuns"] = numOfGuns,
       ["targetCoalition"] = targetCoalition,
       ["skill"] = skill,
-      ["roundsPerBurst"] = roundsPerBurst,
       ["delay"] = delay
     },
     timer.getTime() + 1
@@ -169,9 +198,10 @@ local conc_tgtLastVels = {} -- concentrated target last velocities
 local conc_tgtLastTimes = {} -- concentrated target last velocity timestamps
 function concentrated_prediction(params, time)
   local zoneName = params["zoneName"]
+  local gunType = params["gunType"]
+  local numOfGuns = params["numOfGuns"]
   local targetCoalition = params["targetCoalition"]
   local skill = params["skill"]
-  local roundsPerBurst = params["roundsPerBurst"]
   local delay = params["delay"]
 
   local zone = trigger.misc.getZone(zoneName)
@@ -205,7 +235,7 @@ function concentrated_prediction(params, time)
   end)
   if target ~= nil then
     local targetPos = target:getPoint()
-    if targetDist > minRange and targetDist < maxRange then
+    if targetDist > gunData[gunType].minRange and targetDist < gunData[gunType].maxRange then
       local targetID = target:getID()
       local deltaT = timer.getTime() - conc_tgtLastTimes[targetID]
       local targetVel = target:getVelocity()
@@ -227,18 +257,19 @@ function concentrated_prediction(params, time)
       local targetHeight = targetPos.y - zone.point.y
       -- technically muzzleVelocity - (sqrt(2 * G * targetHeight) / 2)
       -- go a little slower until we can estimate air resistance
-      local averageShellVel =  muzzleVelocity - sqrt(2 * G * targetHeight)
+      local averageShellVel = gunData[gunType].muzzleVel - sqrt(2 * G * targetHeight)
       local travelTime = targetDist / averageShellVel
       local firePos = leadPrediction(targetPos, targetVel, targetAcc, travelTime)
       debugText(
         "Burst at " .. target:getName() .. " arriving in: " ..
         string.format("%2.2fs at %4.2f m/s", travelTime, averageShellVel)
         , 1)
-      for i = 1, roundsPerBurst do
+      for i = 1, numOfGuns do
         timer.scheduleFunction(
           explode,
           {
-            ["position"] = skillDeviation(firePos, targetDist, skill)
+            ["position"] = skillDeviation(firePos, targetDist, gunType, skill),
+            ["shellStrength"] = gunData[gunType].shellStrength
           },
           timer.getTime() + travelTime - 0.2 * random() -- more human-like
         )
@@ -253,7 +284,7 @@ end
 -- Probably want to start this on a Switched Condition,
 --   Part of Coalition in Zone
 local continuousIDs = {}
-function startContinuous(zoneName, targetCoalition, skill, roundsPerMinute, closestOnly)
+function startContinuous(zoneName, gunType, numOfGuns, targetCoalition, skill, closestOnly)
   if targetCoalition == "blue" then
     targetCoalition = 2
   elseif targetCoalition == "red" then
@@ -268,9 +299,10 @@ function startContinuous(zoneName, targetCoalition, skill, roundsPerMinute, clos
     continuously_pointed,
     {
       ["zoneName"] = zoneName,
+      ["gunType"] = gunType,
+      ["numOfGuns"] = numOfGuns,
       ["targetCoalition"] = targetCoalition,
       ["skill"] = skill,
-      ["roundsPerMinute"] = roundsPerMinute,
       ["closestOnly"] = closestOnly or false -- default to shoot everyone
     },
     timer.getTime() + 1
@@ -298,9 +330,10 @@ local cont_tgtLastVels = {} -- continuous target last velocities
 local cont_tgtLastTimes = {} -- continuous target last velocity timestamps
 function continuously_pointed(params, time)
   local zoneName = params["zoneName"]
+  local gunType = params["gunType"]
+  local numOfGuns = params["numOfGuns"]
   local targetCoalition = params["targetCoalition"]
   local skill = params["skill"]
-  local roundsPerMinute = params["roundsPerMinute"]
   local closestOnly = params["closestOnly"]
 
   local zone = trigger.misc.getZone(zoneName)
@@ -345,7 +378,7 @@ function continuously_pointed(params, time)
     else
       targetPos = target:getPoint()
     end
-    if targetDist > minRange and targetDist < maxRange then
+    if targetDist > gunData[gunType].minRange and targetDist < gunData[gunType].maxRange then
       local targetID = target:getID()
       local deltaT = timer.getTime() - cont_tgtLastTimes[targetID]
       local targetVel = target:getVelocity()
@@ -367,7 +400,7 @@ function continuously_pointed(params, time)
       local targetHeight = targetPos.y - zone.point.y
       -- technically muzzleVelocity - (sqrt(2 * G * targetHeight) / 2)
       -- go a little slower until we can estimate air resistance
-      local averageShellVel =  muzzleVelocity - sqrt(2 * G * targetHeight)
+      local averageShellVel =  gunData[gunType].muzzleVel - sqrt(2 * G * targetHeight)
       local travelTime = targetDist / averageShellVel
       local firePos = leadPrediction(targetPos, targetVel, targetAcc, travelTime)
       debugText(
@@ -377,7 +410,8 @@ function continuously_pointed(params, time)
       timer.scheduleFunction(
         explode,
         {
-          ["position"] = skillDeviation(firePos, targetDist, skill)
+          ["position"] = skillDeviation(firePos, targetDist, gunType, skill),
+          ["shellStrength"] = gunData[gunType].shellStrength
         },
         timer.getTime() + travelTime - 0.2 * random() -- more human-like
       )
@@ -386,9 +420,9 @@ function continuously_pointed(params, time)
   end
   if #targets > 0 then
     if closestOnly then
-      return time + ((60/roundsPerMinute))
+      return time + (60 / (gunData[gunType].roundsPerMin * numOfGuns))
     else
-      return time + ((60/roundsPerMinute) * #targets)
+      return time + ((60 / (gunData[gunType].roundsPerMin * numOfGuns)) * #targets)
     end
   else
     return nil -- no more targets, quit
@@ -396,15 +430,16 @@ function continuously_pointed(params, time)
 end
 
 local barrageIDs = {}
-function startBarrage(zoneName, minAlt, maxAlt, roundsPerMinute)
+function startBarrage(zoneName, gunType, numOfGuns, minAlt, maxAlt)
   barrageIDs[zoneName] = -1
   barrageIDs[zoneName] = timer.scheduleFunction(
     barrage,
     {
       ["zoneName"] = zoneName,
+      ["gunType"] = gunType,
+      ["numOfGuns"] = numOfGuns,
       ["minAlt"] = minAlt,
-      ["maxAlt"] = maxAlt,
-      ["roundsPerMinute"] = roundsPerMinute
+      ["maxAlt"] = maxAlt
     },
     timer.getTime() + 1
   )
@@ -430,9 +465,10 @@ end
 function barrage(params, time)
 
   local zoneName = params["zoneName"]
+  local gunType = params["gunType"]
+  local numOfGuns = params["numOfGuns"]
   local minAlt = params["minAlt"]
   local maxAlt = params["maxAlt"]
-  local roundsPerMinute = params["roundsPerMinute"]
 
   local zone = trigger.misc.getZone(zoneName)
 
@@ -449,6 +485,6 @@ function barrage(params, time)
   }
 
   -- create a single flak explosion at the position
-  trigger.action.explosion(firevec3, shellStrength)
-  return time + (60/roundsPerMinute)
+  trigger.action.explosion(firevec3, gunData[gunType].shellStrength)
+  return time + (60 / (gunData[gunType].roundsPerMin * numOfGuns))
 end
