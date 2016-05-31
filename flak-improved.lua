@@ -23,7 +23,7 @@
 --   skill determines accuracy, "low", "med", or "high"
 --   closestOnly optional, set to true to fire continuously only at the closest target
 --     leave blank or set to false to spread fire among all targets
--- End it by calling:
+-- End it manually by calling:
 --   endContinuous("FlakZone1")
 --
 -- Start concentrated prediction fire by calling:
@@ -33,8 +33,16 @@
 --   roundsPerBurst is how many guns will shoot at the single target in one
 --     concentrated burst
 --   delay is seconds between bursts
--- End it by calling:
+-- End it manually by calling:
 --   endConcentrated("FlakZone1")
+
+local _debug = false
+local debugText = nil
+if _debug then
+  debugText = trigger.action.outText
+else
+  debugText = function() end
+end
 
 muzzleVelocity = 820 -- m/s
 minRange = 1000 -- minimum fusing distance
@@ -42,11 +50,11 @@ maxRange = 8000
 shellStrength = 9 -- explosive power of flak shells
 
 -- random deviation by skill in meters
-lowDev = 30
-medDev = 20
-highDev = 10
+lowDev = 40
+medDev = 25
+highDev = 15
 
-local G = 9.81
+local G = 9.81 -- m/s^2
 local PI = math.pi
 local random = math.random
 local cos = math.cos
@@ -63,10 +71,32 @@ function getDistance(a, b)
   return sqrt(x*x+y*y+z*z)
 end
 
-function leadPrediction(targetPos, targetVel, travelTime)
-  local dx = targetVel.x * travelTime
-  local dy = targetVel.y * travelTime
-  local dz = targetVel.z * travelTime
+function vec3mag(a)
+  return getDistance(a, {["x"] = 0, ["y"] = 0, ["z"] = 0})
+end
+
+-- Subtract vector b from vector a
+function vec3sub(a, b)
+  return {
+    ["x"] = a.x-b.x,
+    ["y"] = a.y-b.y,
+    ["z"] = a.z-b.z
+  }
+end
+
+-- Divide vector a by scalar b
+function vec3div(a, b)
+  return {
+    ["x"] = a.x/b,
+    ["y"] = a.y/b,
+    ["z"] = a.z/b
+  }
+end
+
+function leadPrediction(targetPos, targetVel, targetAcc, travelTime)
+  local dx = travelTime * (targetVel.x + targetAcc.x * travelTime / 2)
+  local dy = travelTime * (targetVel.y + targetAcc.y * travelTime / 2)
+  local dz = travelTime * (targetVel.z + targetAcc.z * travelTime / 2)
   return {
     ["x"] = targetPos.x + dx,
     ["y"] = targetPos.y + dy,
@@ -92,7 +122,6 @@ function skillDeviation(firePos, targetDist, skill)
   }
 end
 
-
 -- Probably want to start this on a Switched Condition,
 --   Part of Coalition in Zone
 local concentratedIDs = {}
@@ -105,6 +134,7 @@ function startConcentrated(zoneName, targetCoalition, skill, roundsPerBurst, del
     targetCoalition = 0
   end
 
+  concentratedIDs[zoneName] = -1
   concentratedIDs[zoneName] = timer.scheduleFunction(
     concentrated_prediction,
     {
@@ -116,12 +146,27 @@ function startConcentrated(zoneName, targetCoalition, skill, roundsPerBurst, del
     },
     timer.getTime() + 1
   )
+  debugText(string.format(
+    "Starting concentrated fire ID: %i in zone %s",
+    concentratedIDs[zoneName],
+    zoneName
+  ), 5)
 end
 
 function endConcentrated(zoneName)
-  timer.removeFunction(concentratedIDs[zoneName])
+  if concentratedIDs[zoneName] ~= nil then
+    debugText(string.format(
+      "Ending concentrated fire ID: %i in zone %s",
+      concentratedIDs[zoneName],
+      zoneName
+    ), 5)
+    timer.removeFunction(concentratedIDs[zoneName])
+    concentratedIDs[zoneName] = nil
+  end
 end
 
+local conc_tgtLastVels = {} -- concentrated target last velocities
+local conc_tgtLastTimes = {} -- concentrated target last velocity timestamps
 function concentrated_prediction(params, time)
   local zoneName = params["zoneName"]
   local targetCoalition = params["targetCoalition"]
@@ -144,6 +189,11 @@ function concentrated_prediction(params, time)
   world.searchObjects(Object.Category.UNIT, volS, function(foundUnit, val)
     if foundUnit:getCoalition() == targetCoalition then
       if foundUnit:inAir() and foundUnit:getLife() > 1 then
+        debugText("Found: " .. foundUnit:getName() .. " ID: " .. foundUnit:getID(), 3)
+        if conc_tgtLastVels[foundUnit:getID()] == nil then
+          conc_tgtLastVels[foundUnit:getID()] = foundUnit:getVelocity() -- init
+          conc_tgtLastTimes[foundUnit:getID()] = timer.getTime() -- init
+        end
         range = getDistance(foundUnit:getPoint(), zone.point)
         if range < targetDist then -- find closest target to shoot first
           targetDist = range
@@ -156,20 +206,41 @@ function concentrated_prediction(params, time)
   if target ~= nil then
     local targetPos = target:getPoint()
     if targetDist > minRange and targetDist < maxRange then
+      local targetID = target:getID()
+      local deltaT = timer.getTime() - conc_tgtLastTimes[targetID]
       local targetVel = target:getVelocity()
-			local targetHeight = targetPos.y - zone.point.y
-			-- Losses due to gravity, ignoring air resistance for now
-			local averageShellVel = (muzzleVelocity - sqrt(2 * G * targetHeight))
+      local targetAcc = vec3div(
+        vec3sub(targetVel, conc_tgtLastVels[targetID]),
+        deltaT
+      )
+      debugText(
+        string.format("%s V: %3.2f kt A: %3.2f kt/s dT: %1.2fs",
+          target:getName(),
+          vec3mag(targetVel) * 1.94384, -- m/s to knots
+          vec3mag(targetAcc) * 1.94384,
+          deltaT
+        ),
+        1
+      )
+      conc_tgtLastVels[targetID] = targetVel
+      conc_tgtLastTimes[targetID] = timer.getTime()
+      local targetHeight = targetPos.y - zone.point.y
+      -- technically muzzleVelocity - (sqrt(2 * G * targetHeight) / 2)
+      -- go a little slower until we can estimate air resistance
+      local averageShellVel =  muzzleVelocity - sqrt(2 * G * targetHeight)
       local travelTime = targetDist / averageShellVel
-      local firePos = leadPrediction(targetPos, targetVel, travelTime)
+      local firePos = leadPrediction(targetPos, targetVel, targetAcc, travelTime)
+      debugText(
+        "Burst at " .. target:getName() .. " arriving in: " ..
+        string.format("%2.2fs at %4.2f m/s", travelTime, averageShellVel)
+        , 1)
       for i = 1, roundsPerBurst do
-        firePos = skillDeviation(firePos, targetDist, skill)
         timer.scheduleFunction(
           explode,
           {
-            ["position"] = firePos
+            ["position"] = skillDeviation(firePos, targetDist, skill)
           },
-          timer.getTime() + travelTime
+          timer.getTime() + travelTime - 0.2 * random() -- more human-like
         )
       end
     end
@@ -190,7 +261,9 @@ function startContinuous(zoneName, targetCoalition, skill, roundsPerMinute, clos
   else -- neutral
     targetCoalition = 0
   end
+  debugText(targetCoalition, 5)
 
+  continuousIDs[zoneName] = -1
   continuousIDs[zoneName] = timer.scheduleFunction(
     continuously_pointed,
     {
@@ -202,12 +275,27 @@ function startContinuous(zoneName, targetCoalition, skill, roundsPerMinute, clos
     },
     timer.getTime() + 1
   )
+  debugText(string.format(
+    "Starting continuous fire ID: %i in zone %s",
+    continuousIDs[zoneName],
+    zoneName
+  ), 5)
 end
 
 function endContinuous(zoneName)
-  timer.removeFunction(continuousIDs[zoneName])
+  if continuousIDs[zoneName] ~= nil then
+    debugText(string.format(
+      "Ending continuous fire ID: %i in zone %s",
+      continuousIDs[zoneName],
+      zoneName
+    ), 5)
+    timer.removeFunction(continuousIDs[zoneName])
+    continuousIDs[zoneName] = nil
+  end
 end
 
+local cont_tgtLastVels = {} -- continuous target last velocities
+local cont_tgtLastTimes = {} -- continuous target last velocity timestamps
 function continuously_pointed(params, time)
   local zoneName = params["zoneName"]
   local targetCoalition = params["targetCoalition"]
@@ -229,9 +317,15 @@ function continuously_pointed(params, time)
   local targetDist = math.huge
   local range = math.huge
   world.searchObjects(Object.Category.UNIT, volS, function(foundUnit, val)
+    debugText("Found: " .. foundUnit:getName() .. " ID: " .. foundUnit:getID(), 3)
     if foundUnit:getCoalition() == targetCoalition then
       if foundUnit:inAir() and foundUnit:getLife() > 1 then
+        debugText("Found: " .. foundUnit:getName() .. " ID: " .. foundUnit:getID(), 3)
         targets[#targets + 1] = foundUnit
+        if cont_tgtLastVels[foundUnit:getID()] == nil then
+          cont_tgtLastVels[foundUnit:getID()] = foundUnit:getVelocity() -- init
+          cont_tgtLastTimes[foundUnit:getID()] = timer.getTime() -- init
+        end
         if closestOnly then
           range = getDistance(foundUnit:getPoint(), zone.point)
           if range < targetDist then -- find closest target to shoot first
@@ -252,17 +346,38 @@ function continuously_pointed(params, time)
       targetPos = target:getPoint()
     end
     if targetDist > minRange and targetDist < maxRange then
-      local targetVel = Unit.getVelocity(target)
-			local targetHeight = targetPos.y - zone.point.y
-			-- Losses due to gravity, ignoring air resistance for now
-			local averageShellVel = (muzzleVelocity - sqrt(2 * G * targetHeight))
+      local targetID = target:getID()
+      local deltaT = timer.getTime() - cont_tgtLastTimes[targetID]
+      local targetVel = target:getVelocity()
+      local targetAcc = vec3div(
+        vec3sub(targetVel, cont_tgtLastVels[targetID]),
+        deltaT
+      )
+      debugText(
+        string.format("%s V: %3.2f kt A: %3.2f kt/s dT: %1.2fs",
+          target:getName(),
+          vec3mag(targetVel) * 1.94384, -- m/s to knots
+          vec3mag(targetAcc) * 1.94384,
+          deltaT
+        ),
+        1
+      )
+      cont_tgtLastVels[targetID] = targetVel
+      cont_tgtLastTimes[targetID] = timer.getTime()
+      local targetHeight = targetPos.y - zone.point.y
+      -- technically muzzleVelocity - (sqrt(2 * G * targetHeight) / 2)
+      -- go a little slower until we can estimate air resistance
+      local averageShellVel =  muzzleVelocity - sqrt(2 * G * targetHeight)
       local travelTime = targetDist / averageShellVel
-      local firePos = leadPrediction(targetPos, targetVel, travelTime)
-      firePos = skillDeviation(firePos, targetDist, skill)
+      local firePos = leadPrediction(targetPos, targetVel, targetAcc, travelTime)
+      debugText(
+        "Shot at " .. target:getName() .. " arriving in: " ..
+        string.format("%2.2fs at %4.2f m/s", travelTime, averageShellVel)
+        , 1)
       timer.scheduleFunction(
         explode,
         {
-          ["position"] = firePos
+          ["position"] = skillDeviation(firePos, targetDist, skill)
         },
         timer.getTime() + travelTime - 0.2 * random() -- more human-like
       )
@@ -282,6 +397,7 @@ end
 
 local barrageIDs = {}
 function startBarrage(zoneName, minAlt, maxAlt, roundsPerMinute)
+  barrageIDs[zoneName] = -1
   barrageIDs[zoneName] = timer.scheduleFunction(
     barrage,
     {
@@ -292,10 +408,23 @@ function startBarrage(zoneName, minAlt, maxAlt, roundsPerMinute)
     },
     timer.getTime() + 1
   )
+  debugText(string.format(
+    "Starting barrage ID: %i in zone %s",
+    barrageIDs[zoneName],
+    zoneName
+  ), 5)
 end
 
 function endBarrage(zoneName)
-  timer.removeFunction(barrageIDs[zoneName])
+  if barrageIDs[zoneName] ~= nil then
+    debugText(string.format(
+      "Ending barrage ID: %i in zone %s",
+      barrageIDs[zoneName],
+      zoneName
+    ), 5)
+    timer.removeFunction(barrageIDs[zoneName])
+    barrageIDs[zoneName] = nil
+  end
 end
 
 function barrage(params, time)
