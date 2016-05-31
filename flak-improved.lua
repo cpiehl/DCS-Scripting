@@ -38,7 +38,7 @@
 -- End it manually by calling:
 --   endConcentrated("FlakZone1")
 
-local _debug = true
+local _debug = false
 local debugText = nil
 if _debug then
   debugText = trigger.action.outText
@@ -46,7 +46,7 @@ else
   debugText = function() end
 end
 
-gunData = {
+local gunData = {
   ["flak88"] = {
     ["muzzleVel"] = 840,  -- m/s
     ["minRange"] = 1000,  -- minimum fusing distance in meters
@@ -78,12 +78,12 @@ gunData = {
 }
 
 -- random deviation by skill in meters
-lowDev = 40
-medDev = 25
-highDev = 15
+local lowDev = 40
+local medDev = 25
+local highDev = 15
 
-local G = 9.81 -- m/s^2
-local PI = math.pi
+local Gx2 = 9.81 * 2 -- m/s^2 -- why not save the operations?
+local PIx2 = math.pi * 2
 local random = math.random
 local cos = math.cos
 local sin = math.sin
@@ -94,13 +94,14 @@ function explode(params, time)
   return nil
 end
 
-function getDistance(a, b)
+-- returns distance squared, sqrt() later if you really need it
+function getDistance2(a, b)
   local x, y, z = a.x-b.x, a.y-b.y, a.z-b.z
-  return sqrt(x*x+y*y+z*z)
+  return x*x + y*y + z*z
 end
 
 function vec3mag(a)
-  return getDistance(a, {["x"] = 0, ["y"] = 0, ["z"] = 0})
+  return sqrt(getDistance2(a, {["x"] = 0, ["y"] = 0, ["z"] = 0}))
 end
 
 -- Subtract vector b from vector a
@@ -214,8 +215,8 @@ function concentrated_prediction(params, time)
    }
 
   local target = nil
-  local targetDist = math.huge
-  local range = math.huge
+  local targetDist2 = math.huge  -- squared ranges, sqrt() later if needed
+  local range2 = math.huge
   world.searchObjects(Object.Category.UNIT, volS, function(foundUnit, val)
     if foundUnit:getCoalition() == targetCoalition then
       if foundUnit:inAir() and foundUnit:getLife() > 1 then
@@ -224,16 +225,17 @@ function concentrated_prediction(params, time)
           conc_tgtLastVels[foundUnit:getID()] = foundUnit:getVelocity() -- init
           conc_tgtLastTimes[foundUnit:getID()] = timer.getTime() -- init
         end
-        range = getDistance(foundUnit:getPoint(), zone.point)
-        if range < targetDist then -- find closest target to shoot first
-          targetDist = range
-          target = foundUnit
+        range2 = getDistance2(foundUnit:getPoint(), zone.point)
+        if range2 < targetDist2 then -- find closest target to shoot first
+          targetDist2 = range2
+          target = foundUnit  -- save this for later
         end
       end
     end
     return true
   end)
   if target ~= nil then
+    local targetDist = sqrt(targetDist2)
     local targetPos = target:getPoint()
     if targetDist > gunData[gunType].minRange and targetDist < gunData[gunType].maxRange then
       local targetID = target:getID()
@@ -257,7 +259,7 @@ function concentrated_prediction(params, time)
       local targetHeight = targetPos.y - zone.point.y
       -- technically muzzleVelocity - (sqrt(2 * G * targetHeight) / 2)
       -- go a little slower until we can estimate air resistance
-      local averageShellVel = gunData[gunType].muzzleVel - sqrt(2 * G * targetHeight)
+      local averageShellVel = gunData[gunType].muzzleVel - sqrt(Gx2 * targetHeight)
       local travelTime = targetDist / averageShellVel
       local firePos = leadPrediction(targetPos, targetVel, targetAcc, travelTime)
       debugText(
@@ -346,9 +348,8 @@ function continuously_pointed(params, time)
    }
   local targets = {}
   local target = nil
-  local targetPos = nil
-  local targetDist = math.huge
-  local range = math.huge
+  local targetDist2 = math.huge  -- squared ranges, sqrt() later if needed
+  local range2 = math.huge
   world.searchObjects(Object.Category.UNIT, volS, function(foundUnit, val)
     debugText("Found: " .. foundUnit:getName() .. " ID: " .. foundUnit:getID(), 3)
     if foundUnit:getCoalition() == targetCoalition then
@@ -360,10 +361,10 @@ function continuously_pointed(params, time)
           cont_tgtLastTimes[foundUnit:getID()] = timer.getTime() -- init
         end
         if closestOnly then
-          range = getDistance(foundUnit:getPoint(), zone.point)
-          if range < targetDist then -- find closest target to shoot first
-            targetDist = range
-            target = foundUnit
+          range2 = getDistance2(foundUnit:getPoint(), zone.point)
+          if range2 < targetDist2 then -- find closest target to shoot first
+            targetDist2 = range2
+            target = foundUnit  -- save this for later
           end
         end
       end
@@ -373,11 +374,9 @@ function continuously_pointed(params, time)
   for i = 1, #targets do
     if closestOnly == false then
       target = targets[i] -- divide up targets
-      targetPos = target:getPoint()
-      targetDist = getDistance(targetPos, zone.point)
-    else
-      targetPos = target:getPoint()
     end
+    local targetPos = target:getPoint()
+    local targetDist = sqrt(getDistance2(targetPos, zone.point))
     if targetDist > gunData[gunType].minRange and targetDist < gunData[gunType].maxRange then
       local targetID = target:getID()
       local deltaT = timer.getTime() - cont_tgtLastTimes[targetID]
@@ -400,7 +399,7 @@ function continuously_pointed(params, time)
       local targetHeight = targetPos.y - zone.point.y
       -- technically muzzleVelocity - (sqrt(2 * G * targetHeight) / 2)
       -- go a little slower until we can estimate air resistance
-      local averageShellVel =  gunData[gunType].muzzleVel - sqrt(2 * G * targetHeight)
+      local averageShellVel =  gunData[gunType].muzzleVel - sqrt(Gx2 * targetHeight)
       local travelTime = targetDist / averageShellVel
       local firePos = leadPrediction(targetPos, targetVel, targetAcc, travelTime)
       debugText(
@@ -473,7 +472,7 @@ function barrage(params, time)
   local zone = trigger.misc.getZone(zoneName)
 
   --get a random point in the zone
-  local t = 2 * PI * random()
+  local t = PIx2 * random()
   local r = random()
 
   --taking into account terrain height generate a vec3 position at the
