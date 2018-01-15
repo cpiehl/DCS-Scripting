@@ -1,6 +1,7 @@
 -- DO SCRIPT FILE on mission start
 -- place pairs of pylons named like "GateLeft #001" and "GateRight #001"
 
+
 local gateDepth = 30 -- meters
 local timerHiResDist2 = 50^2 -- high resolution timer distance in meters squared
 local timerMedResDist2 = 200^2 -- medium resolution timer distance in meters squared
@@ -11,6 +12,7 @@ local upvec = {
 	['z'] = 0
 }
 local gates = {}
+local players = {}
 local playersLapTime = {}
 local playersPenaltyTime = {}
 local playersNextGate = {}
@@ -80,16 +82,12 @@ function vec3norm(a)
 end
 
 function outputStartLap(playerName)
-	trigger.action.outText(playerName .. " Lap Start!", 1, false)
+	local gID = players[playerName]:getGroup():getID()
+	trigger.action.outTextForGroup(gID, playerName .. " Lap Start!", 1, false)
 end
 
-function outputEndLap(playerName)
-	local newrecord = ""
-	local laptime = timer.getTime() - playersLapTime[playerName] + playersPenaltyTime[playerName]
-	if leaderboard[playerName] == nil or leaderboard[playerName]  < laptime then
-		leaderboard[playerName] = laptime
-		newrecord = "NEW Record!"
-	end
+function outputLeaderboard(playerName)
+	local gID = players[playerName]:getGroup():getID()
 	local a = {}
 	for n,t in pairs(leaderboard) do
 		table.insert(a, {n, t})
@@ -97,13 +95,7 @@ function outputEndLap(playerName)
 	table.sort(a, function(a, b)
 		return a[2] < b[2]
 	end)
-	local output = string.format(
-		"%s Time (Penalty): %3.2f (%+ds) %s\n\nLeaderboard:\n",
-		playerName,
-		laptime,
-		playersPenaltyTime[playerName],
-		newrecord
-	)
+	local output = "Leaderboard:\n"
 	for i,n in ipairs(a) do
 		output = output .. string.format(
 			"%d. %s %3.2f\n",
@@ -115,21 +107,41 @@ function outputEndLap(playerName)
 --~ 			break
 --~ 		end
 	end
-	trigger.action.outText(output, 10, false)
+	trigger.action.outTextForGroup(gID, output, 10, false)
+end
+
+function outputEndLap(playerName)
+	local gID = players[playerName]:getGroup():getID()
+	local newrecord = ""
+	local laptime = timer.getTime() - playersLapTime[playerName] + playersPenaltyTime[playerName]
+	if leaderboard[playerName] == nil or leaderboard[playerName] > laptime then
+		leaderboard[playerName] = laptime
+		newrecord = "NEW Record!"
+	end
+	trigger.action.outText(string.format(
+		"%s Time (Penalty): %3.2f (%+ds) %s",
+		playerName,
+		laptime,
+		playersPenaltyTime[playerName],
+		newrecord
+	), 5, false)
+	outputLeaderboard(playerName)
 end
 
 function outputGatePassed(playerName, nextGateNum)
-	trigger.action.outText(playerName .. " passed Gate #" .. nextGateNum, 1, false)
+	local gID = players[playerName]:getGroup():getID()
+	trigger.action.outTextForGroup(gID, playerName .. " passed Gate #" .. nextGateNum, 1, false)
 end
 
 function outputGatePenalty(playerName, nextGateNum)
-	trigger.action.outText(playerName .. " +2s penalty Gate #" .. nextGateNum, 1, false)
+	local gID = players[playerName]:getGroup():getID()
+	trigger.action.outTextForGroup(gID, playerName .. " +2s penalty Gate #" .. nextGateNum, 1, false)
 end
 
 function inGateBounds(playerName, nextGateNum)
 	local f, r, l, b, n, pos
 	n = nextGateNum
-	pos = Unit.getByName(playerName):getPoint()
+	pos = players[playerName]:getPoint()
 
 	f = vec3cross(vec3sub(pos, gates[n].left), gates[n].fvec)
 	r = vec3cross(vec3sub(pos, gates[n].right), gates[n].rvec)
@@ -137,15 +149,13 @@ function inGateBounds(playerName, nextGateNum)
 	l = vec3cross(vec3sub(pos, gates[n].bl), gates[n].lvec)
 
 	-- are all cross products the same sign?
-	if (f.y > 0 and r.y > 0 and l.y > 0 and b.y > 0) or (f.y < 0 and r.y < 0 and l.y < 0 and b.y < 0) then
+	if (f.y > 0 and r.y > 0 and l.y > 0 and b.y > 0) then -- or (f.y < 0 and r.y < 0 and l.y < 0 and b.y < 0) then
 		if (gates[n].y < pos.y) then
 			return 1 -- passed with penalty
 		end
 		return 2 -- passed without penalty
 	end
 	return 0
-
---~ 	return getDistance2(pos, gates[nextGateNum].pos) < gates[nextGateNum].rad2
 end
 
 function checkGates(params, time)
@@ -154,7 +164,7 @@ function checkGates(params, time)
 	local nextGateNum = playersNextGate[playerName]
 	gateStatus = inGateBounds(playerName, nextGateNum)
 	if gateStatus > 0 then
-		if nextGateNum == 1 and gateStatus == 2 then -- start lap
+		if nextGateNum == 1 and gateStatus = 2 then -- start lap
 			playersLapTime[playerName] = timer.getTime()
 			playersPenaltyTime[playerName] = 0
 			outputStartLap(playerName)
@@ -170,7 +180,7 @@ function checkGates(params, time)
 			outputEndLap(playerName)
 		end
 	end
-	local dist2 = getDistance2(Unit.getByName(playerName):getPoint(), gates[nextGateNum].pos)
+	local dist2 = getDistance2(players[playerName]:getPoint(), gates[nextGateNum].pos)
 	if
 		dist2 < timerHiResDist2 and
 		(playersNextGate[playerName] == 1 or
@@ -182,7 +192,7 @@ function checkGates(params, time)
 --~ 		trigger.action.outText("Med Resolution Update Mode: " .. time, 1, false)
 		interval = 0.1
 	else
---~ 		trigger.action.outText("Low Resolution Update Mode: " .. time, 1, false)
+--~ 		trigger.action.outText(playerName .. " Low Resolution Update Mode: " .. time, 1, false)
 		interval = 1
 	end
 	return time + interval
@@ -190,34 +200,49 @@ end
 
 function init()
 	-- server init players (mostly for singleplayer)
+	local playerName, gID
 	for key,value in pairs(coalition.getPlayers(2)) do -- blue
-		playersNextGate[value:getName()] = 1
-		timerIDs[value:getName()] = timer.scheduleFunction(
+		playerName = value:getPlayerName()
+		trigger.action.outText(playerName .. " entered " .. value:getTypeName(), 1, false)
+		players[playerName] = value
+		playersNextGate[playerName] = 1
+		timerIDs[playerName] = timer.scheduleFunction(
 			checkGates,
 			{
-				["playerName"] = value:getName()
+				["playerName"] = playerName
 			},
 			timer.getTime() + 1
 		)
+		gID = players[playerName]:getGroup():getID()
+		missionCommands.addCommandForGroup(gID, "Leaderboard", nil, outputLeaderboard, playerName)
 	end
 
 	-- init any latecomers
 	function playerJoinEventHandler:onEvent(event)
+		local playerName, gID
 		if event.id == world.event.S_EVENT_PLAYER_ENTER_UNIT then
-			trigger.action.outText(event.initiator:getName() .. " entered " .. event.initiator:getTypeName(), 1, false)
-			playersNextGate[event.initiator:getName()] = 1
-			timerIDs[event.initiator:getName()] = timer.scheduleFunction(
+			playerName = event.initiator:getPlayerName()
+			trigger.action.outText(playerName .. " entered " .. event.initiator:getTypeName(), 1, false)
+			players[playerName] = event.initiator
+			playersNextGate[playerName] = 1
+			timerIDs[playerName] = timer.scheduleFunction(
 				checkGates,
 				{
-					["playerName"] = event.initiator:getName()
+					["playerName"] = playerName
 				},
 				timer.getTime() + 1
 			)
+			gID = players[playerName]:getGroup():getID()
+			missionCommands.addCommandForGroup(gID, "Leaderboard", nil, outputLeaderboard, playerName)
+
 		elseif event.id == world.event.S_EVENT_PLAYER_LEAVE_UNIT then
-			trigger.action.outText(event.initiator:getName() .. " left " .. event.initiator:getTypeName(), 1, false)
-			timer.removeFunction(timerIDs[event.initiator:getName()])
-			playersNextGate[event.initiator:getName()] = nil
-			timerIDs[event.initiator:getName()] = nil
+			playerName = event.initiator:getPlayerName()
+			trigger.action.outText(playerName .. " left " .. event.initiator:getTypeName(), 1, false)
+			if timerIDs[playerName] ~= nil then
+				timer.removeFunction(timerIDs[playerName])
+			end
+			playersNextGate[playerName] = nil
+			timerIDs[playerName] = nil
 		end
 	end
 	world.addEventHandler(playerJoinEventHandler)
@@ -231,20 +256,19 @@ function init()
 			name = staticObjects[i]:getName()
 			gateNum = tonumber(name:sub(#name - 1))
 			gateSide = name:sub(5, 5)
---~ 			trigger.action.outText(staticObjects[i]:getTypeName() .. " " .. name .. " " .. gateNum .. " " .. gateSide, 1, false)
 			if gates[gateNum] == nil then
 				gates[gateNum] = {}
 				gates[gateNum].desc = staticObjects[i]:getDesc()
 			end
 			if gateSide == "R" then
 				gates[gateNum]["right"] = staticObjects[i]:getPoint()
-			else
+			else -- gateSide == "L"
 				gates[gateNum]["left"] = staticObjects[i]:getPoint()
 			end
 		end
 	end
 
-	totalGates = #gates
+	totalGates = #gates -- just in case length is O(n)
 	for i = 1, totalGates do
 		gates[i].pos = midpoint(gates[i].left, gates[i].right)
 		gates[i].rad2 = getDistance2(gates[i].left, gates[i].right) / 2
