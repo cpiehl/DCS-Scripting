@@ -1,6 +1,10 @@
 -- DO SCRIPT FILE on mission start
 -- place pairs of pylons named like "GateLeft #001" and "GateRight #001"
+-- F10 menu to show leaderboard and restart lap attempt
 
+-- TODO
+-- on leave event, iterate all players and remove nonexistant
+-- support more than Airshow_Cone
 
 local gateDepth = 30 -- meters
 local timerHiResDist2 = 50^2 -- high resolution timer distance in meters squared
@@ -164,7 +168,7 @@ function checkGates(params, time)
 	local nextGateNum = playersNextGate[playerName]
 	gateStatus = inGateBounds(playerName, nextGateNum)
 	if gateStatus > 0 then
-		if nextGateNum == 1 and gateStatus = 2 then -- start lap
+		if nextGateNum == 1 and gateStatus == 2 then -- start lap
 			playersLapTime[playerName] = timer.getTime()
 			playersPenaltyTime[playerName] = 0
 			outputStartLap(playerName)
@@ -198,6 +202,11 @@ function checkGates(params, time)
 	return time + interval
 end
 
+function restartLap(playerName)
+	trigger.action.outText(playerName .. " DNF", 3, false)
+	playersNextGate[playerName] = 1
+end
+
 function init()
 	-- server init players (mostly for singleplayer)
 	local playerName, gID
@@ -215,55 +224,62 @@ function init()
 		)
 		gID = players[playerName]:getGroup():getID()
 		missionCommands.addCommandForGroup(gID, "Leaderboard", nil, outputLeaderboard, playerName)
+		missionCommands.addCommandForGroup(gID, "Restart Lap", nil, restartLap, playerName)
 	end
 
 	-- init any latecomers
 	function playerJoinEventHandler:onEvent(event)
 		local playerName, gID
-		if event.id == world.event.S_EVENT_PLAYER_ENTER_UNIT then
-			playerName = event.initiator:getPlayerName()
-			trigger.action.outText(playerName .. " entered " .. event.initiator:getTypeName(), 1, false)
-			players[playerName] = event.initiator
-			playersNextGate[playerName] = 1
-			timerIDs[playerName] = timer.scheduleFunction(
-				checkGates,
-				{
-					["playerName"] = playerName
-				},
-				timer.getTime() + 1
-			)
-			gID = players[playerName]:getGroup():getID()
-			missionCommands.addCommandForGroup(gID, "Leaderboard", nil, outputLeaderboard, playerName)
-
-		elseif event.id == world.event.S_EVENT_PLAYER_LEAVE_UNIT then
-			playerName = event.initiator:getPlayerName()
-			trigger.action.outText(playerName .. " left " .. event.initiator:getTypeName(), 1, false)
-			if timerIDs[playerName] ~= nil then
-				timer.removeFunction(timerIDs[playerName])
+		if event.id == world.event.S_EVENT_BIRTH then
+			if event.initiator ~= nil then
+				playerName = event.initiator:getPlayerName()
+				trigger.action.outText(playerName .. " entered " .. event.initiator:getTypeName(), 1, false)
+				players[playerName] = event.initiator
+				playersNextGate[playerName] = 1
+				timerIDs[playerName] = timer.scheduleFunction(
+					checkGates,
+					{
+						["playerName"] = playerName
+					},
+					timer.getTime() + 1
+				)
+				gID = players[playerName]:getGroup():getID()
+				missionCommands.addCommandForGroup(gID, "Leaderboard", nil, outputLeaderboard, playerName)
+				missionCommands.addCommandForGroup(gID, "Restart Lap", nil, restartLap, playerName)
 			end
-			playersNextGate[playerName] = nil
-			timerIDs[playerName] = nil
+		elseif event.id == world.event.S_EVENT_PLAYER_LEAVE_UNIT then
+			if event.initiator ~= nil then
+				playerName = event.initiator:getPlayerName()
+				trigger.action.outText(playerName .. " left " .. event.initiator:getTypeName(), 1, false)
+				if timerIDs[playerName] ~= nil then
+					timer.removeFunction(timerIDs[playerName])
+				end
+				playersNextGate[playerName] = nil
+				timerIDs[playerName] = nil
+			end
 		end
 	end
 	world.addEventHandler(playerJoinEventHandler)
 
 	-- init gate locations
 	local staticObjects = coalition.getStaticObjects(2) -- blue
-	local name, gateNum
+	local name, gateNum, gateName
 
 	for i = 1, #staticObjects do
 		if staticObjects[i]:getTypeName() == "Airshow_Cone" then
 			name = staticObjects[i]:getName()
-			gateNum = tonumber(name:sub(#name - 1))
-			gateSide = name:sub(5, 5)
-			if gates[gateNum] == nil then
-				gates[gateNum] = {}
-				gates[gateNum].desc = staticObjects[i]:getDesc()
-			end
-			if gateSide == "R" then
-				gates[gateNum]["right"] = staticObjects[i]:getPoint()
-			else -- gateSide == "L"
-				gates[gateNum]["left"] = staticObjects[i]:getPoint()
+			gateName = name:sub(1, #name - 5)
+			if gateName == "GateRight" or gateName == "GateLeft" then
+				gateNum = tonumber(name:sub(#name - 2))
+				if gates[gateNum] == nil then
+					gates[gateNum] = {}
+					gates[gateNum].desc = staticObjects[i]:getDesc()
+				end
+				if gateName == "GateRight" then
+					gates[gateNum]["right"] = staticObjects[i]:getPoint()
+				else -- gateName == "GateLeft"
+					gates[gateNum]["left"] = staticObjects[i]:getPoint()
+				end
 			end
 		end
 	end
